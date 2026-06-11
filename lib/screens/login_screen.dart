@@ -103,8 +103,10 @@ class _LoginScreenState extends State<LoginScreen> {
               const SizedBox(height: 20),
 
               // Links recuperación
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              // Links recuperación
+              Wrap(
+                alignment: WrapAlignment.center,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   TextButton(
                     onPressed: () => Navigator.push(context,

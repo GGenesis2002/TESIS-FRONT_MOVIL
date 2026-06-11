@@ -6,10 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthService {
   static String get _base {
-    if (kIsWeb) return 'http://localhost:4000/api';
-    // IMPORTANTE: Asegúrate de que esta sea la IP de tu PC en la red local
-    // Verifica con 'ipconfig' en la terminal de Windows
-    return 'http://192.168.100.4:4000/api';
+    return 'https://tesis-backend-qr.onrender.com/api';
   }
   static String get baseUrl => _base;
   static const _timeout = Duration(seconds: 12);

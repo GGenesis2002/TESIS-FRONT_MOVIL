@@ -32,8 +32,10 @@ flutter:
   assets:
     - assets/logoLab.png
 
-flutter_launcher_icons: # Añade todo este bloque
+flutter_launcher_icons:
   android: "launcher_icon"
   ios: true
   image_path: "assets/logoLab.png"
   min_sdk_android: 21
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/logoLab.png"
