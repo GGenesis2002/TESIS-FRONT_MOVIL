@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_pdfview/flutter_pdfview.dart';
 import 'package:http/http.dart' as http;
@@ -25,6 +26,9 @@ class _ResultadosScreenState extends State<ResultadosScreen> {
   bool _loading = true;
   String _error = '';
 
+  final _searchCtrl = TextEditingController();
+  String _busqueda = '';
+
   @override
   void initState() {
     super.initState();
@@ -38,6 +42,7 @@ class _ResultadosScreenState extends State<ResultadosScreen> {
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _searchCtrl.dispose();
     super.dispose();
   }
 
@@ -68,6 +73,13 @@ class _ResultadosScreenState extends State<ResultadosScreen> {
         orden: orden,
       ),
     );
+  }
+  List<dynamic> get _ordenesFiltradas {
+    if (_busqueda.isEmpty) return _ordenes;
+    return _ordenes.where((o) {
+      final ticket = (o['numero_ticket'] ?? '').toString().toLowerCase();
+      return ticket.contains(_busqueda.toLowerCase());
+    }).toList();
   }
 
   @override
@@ -114,13 +126,81 @@ class _ResultadosScreenState extends State<ResultadosScreen> {
           : RefreshIndicator(
         onRefresh: _cargar,
         color: AppTheme.orange,
-        child: ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: _ordenes.length,
-          itemBuilder: (_, i) => _OrdenCard(
-            orden: _ordenes[i],
-            onTap: () => _verDetalle(_ordenes[i]),
-          ),
+        child: Column(
+          children: [
+            // ── Buscador ──
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: TextField(
+                controller: _searchCtrl,
+                onChanged: (v) => setState(() => _busqueda = v.trim()),
+                decoration: InputDecoration(
+                  hintText: 'Buscar por número de ticket...',
+                  prefixIcon: const Icon(Icons.search_rounded,
+                      color: AppTheme.gray400, size: 20),
+                  suffixIcon: _busqueda.isNotEmpty
+                      ? IconButton(
+                    icon: const Icon(Icons.clear_rounded,
+                        color: AppTheme.gray400, size: 18),
+                    onPressed: () => setState(() {
+                      _busqueda = '';
+                      _searchCtrl.clear();
+                    }),
+                  )
+                      : null,
+                ),
+              ),
+            ),
+            // ── Banner retención ──
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppTheme.amberLight,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFFFCA28)),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline_rounded, size: 16, color: AppTheme.amber),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Los resultados se eliminan automáticamente a los 3 meses. '
+                          'Te recomendamos descargarlos antes de ese plazo.',
+                      style: TextStyle(fontSize: 11, color: AppTheme.amber, height: 1.4),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // ── Lista ──
+            Expanded(
+              child: _ordenesFiltradas.isEmpty
+                  ? Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.search_off_rounded,
+                        size: 48, color: AppTheme.gray400),
+                    const SizedBox(height: 12),
+                    Text('No se encontró el ticket "$_busqueda"',
+                        style: const TextStyle(
+                            fontSize: 13, color: AppTheme.gray400)),
+                  ],
+                ),
+              )
+                  : ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: _ordenesFiltradas.length,
+                itemBuilder: (_, i) => _OrdenCard(
+                  orden: _ordenesFiltradas[i],
+                  onTap: () => _verDetalle(_ordenesFiltradas[i]),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -594,7 +674,8 @@ class _DetalleResultadosSheetState extends State<_DetalleResultadosSheet> {
       final e = _evaluar(
           p['resultado'] ?? p['valor_obtenido'],
           p['rango_min'],
-          p['rango_max']);
+          p['rango_max'],
+          p['valor_referencia']);
       return e == _EstadoValor.alto || e == _EstadoValor.bajo;
     });
 
@@ -697,7 +778,7 @@ class _DetalleResultadosSheetState extends State<_DetalleResultadosSheet> {
     final valorRaw = p['resultado'] ?? p['valor_obtenido'];
     final valor = valorRaw?.toString() ?? '—';
     final unidad = p['unidad']?.toString() ?? '';
-    final estado = _evaluar(valorRaw, p['rango_min'], p['rango_max']);
+    final estado = _evaluar(valorRaw, p['rango_min'], p['rango_max'], p['valor_referencia']);
     final rango = _rangoTexto(p);
     final color = _colorEstado(estado);
 
@@ -755,8 +836,38 @@ class _DetalleResultadosSheetState extends State<_DetalleResultadosSheet> {
   }
 
   // ── Helpers ──────────────────────────────────────────
-  _EstadoValor _evaluar(dynamic val, dynamic min, dynamic max) {
+
+  // Parsea el campo valor_referencia (JSON string guardado por la pantalla
+  // de configuración de parámetros) y devuelve el tipo ('NUMERICO', 'TEXTO'
+  // u 'OPCIONES') junto con la lista de opciones si aplica. Si no es JSON
+  // válido o viene vacío, se asume NUMERICO (compatibilidad con parámetros
+  // creados antes de este cambio).
+  Map<String, dynamic> _tipoDato(dynamic valorReferencia) {
+    final raw = valorReferencia?.toString();
+    if (raw == null || raw.isEmpty) {
+      return {'tipo': 'NUMERICO', 'opciones': <String>[]};
+    }
+    try {
+      final parsed = jsonDecode(raw);
+      if (parsed is Map) {
+        final opciones = (parsed['opciones'] as List?)
+            ?.map((o) => o.toString())
+            .toList() ??
+            <String>[];
+        return {'tipo': parsed['tipo']?.toString() ?? 'NUMERICO', 'opciones': opciones};
+      }
+    } catch (_) {
+      // valor_referencia no es JSON válido (dato viejo) → se asume numérico
+    }
+    return {'tipo': 'NUMERICO', 'opciones': <String>[]};
+  }
+
+  // Solo los parámetros NUMÉRICOS se clasifican como Alto/Bajo/Normal.
+  // Texto libre y Opciones nunca entran en esa comparación.
+  _EstadoValor _evaluar(dynamic val, dynamic min, dynamic max, dynamic valorReferencia) {
     if (val == null || val.toString().isEmpty) return _EstadoValor.sinDato;
+    final tipo = _tipoDato(valorReferencia)['tipo'];
+    if (tipo != 'NUMERICO') return _EstadoValor.normal;
     final num = double.tryParse(val.toString());
     final dMin = double.tryParse(min?.toString() ?? '');
     final dMax = double.tryParse(max?.toString() ?? '');
@@ -767,11 +878,16 @@ class _DetalleResultadosSheetState extends State<_DetalleResultadosSheet> {
   }
 
   String _rangoTexto(dynamic r) {
+    final info = _tipoDato(r['valor_referencia']);
+    final tipo = info['tipo'];
+    if (tipo == 'OPCIONES') {
+      final opciones = (info['opciones'] as List<String>);
+      return opciones.isNotEmpty ? opciones.join(' / ') : '—';
+    }
+    if (tipo == 'TEXTO') return 'Texto libre';
     final min = r['rango_min']?.toString();
     final max = r['rango_max']?.toString();
-    final ref = r['valor_referencia']?.toString();
     if (min != null && max != null) return '$min – $max';
-    if (ref != null && ref.isNotEmpty) return ref;
     return '—';
   }
 

@@ -122,7 +122,7 @@ class _RegistroScreenState extends State<RegistroScreen> {
     setState(() => _loading = false);
 
     if (res['msg'] != null || res['id_usuario'] != null) {
-      setState(() => _exito = '¡Cuenta creada exitosamente! Ya puedes iniciar sesión.');
+      setState(() => _exito = '¡Cuenta creada exitosamente! Ya puedes iniciar sesión. Si no inicias sesión dentro de 1 mes, tu cuenta estará inactiva y deberas acercarte al laboratorio para activarla y poder usarla en al aplicación.');
     } else {
       setState(() => _error = res['error'] ?? 'Error al registrarse.');
     }

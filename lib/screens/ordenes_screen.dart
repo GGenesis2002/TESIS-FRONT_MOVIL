@@ -64,6 +64,34 @@ class _OrdenesScreenState extends State<OrdenesScreen> {
     }
   }
 
+  /// Retorna true si la orden no está pagada y tiene más de 2 días de creada
+  bool _estaVencida(dynamic orden) {
+    final estado = orden['estado'] ?? 'Generada';
+    if (estado != 'Generada') return false;
+    final fechaStr = orden['fecha_orden'] ?? '';
+    if (fechaStr == null || fechaStr.toString().isEmpty) return false;
+    try {
+      final fecha = DateTime.parse(fechaStr.toString());
+      final diff = DateTime.now().difference(fecha);
+      return diff.inDays >= 2;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Formatea la fecha de creación para mostrarla en la tarjeta
+  String _formatearFecha(dynamic orden) {
+    final fechaStr = orden['fecha_orden'] ?? '';
+    if (fechaStr == null || fechaStr.toString().isEmpty) return '';
+    try {
+      final fecha = DateTime.parse(fechaStr.toString());
+      final meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+      return '${fecha.day} ${meses[fecha.month - 1]} ${fecha.year}';
+    } catch (_) {
+      return fechaStr.toString();
+    }
+  }
+
   void _abrirNuevaOrden() {
     showModalBottomSheet(
       context: context,
@@ -333,12 +361,6 @@ class _OrdenesScreenState extends State<OrdenesScreen> {
           const SizedBox(height: 12),
           const Text('No tienes órdenes aún',
               style: TextStyle(fontSize: 14, color: AppTheme.gray400)),
-          const SizedBox(height: 20),
-          ElevatedButton.icon(
-            onPressed: _abrirNuevaOrden,
-            icon: const Icon(Icons.add_rounded, color: Colors.white),
-            label: const Text('Crear primera orden'),
-          ),
         ]),
       )
           : Column(
@@ -446,113 +468,173 @@ class _OrdenesScreenState extends State<OrdenesScreen> {
                         await _eliminarOrden(o);
                         return false;
                       },
-                      child: Container(
-                        margin: const EdgeInsets.only(bottom: 10),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppTheme.gray200),
-                        ),
-                        child: Column(
-                          children: [
-                            ListTile(
-                              contentPadding:
-                              const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                              leading: Container(
-                                width: 44, height: 44,
-                                decoration: BoxDecoration(
-                                    color: _bgEstado(estado),
-                                    borderRadius: BorderRadius.circular(10)),
-                                child: Icon(Icons.receipt_long_rounded,
-                                    color: _colorEstado(estado), size: 22),
-                              ),
-                              title: Text('#${o['numero_ticket'] ?? '—'}',
-                                  style: const TextStyle(
-                                      fontSize: 14, fontWeight: FontWeight.w700)),
-                              subtitle: Text(
-                                'Total: \$${o['total'] ?? '0.00'}',
-                                style: const TextStyle(
-                                    fontSize: 12, color: AppTheme.gray600),
-                              ),
-                              trailing: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(
-                                    color: _bgEstado(estado),
-                                    borderRadius: BorderRadius.circular(20)),
-                                child: Text(estado,
-                                    style: TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w700,
-                                        color: _colorEstado(estado))),
-                              ),
+                      child: Builder(builder: (context) {
+                        final vencida = _estaVencida(o);
+                        final fechaTexto = _formatearFecha(o);
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          decoration: BoxDecoration(
+                            color: vencida ? const Color(0xFFFFF5F5) : Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: vencida ? AppTheme.red : AppTheme.gray200,
+                              width: vencida ? 1.5 : 1.0,
                             ),
-
-                            // ── Botones de acción ──
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-                              child: Row(
-                                children: [
-                                  // FIX 2: botón VER siempre visible
-                                  Expanded(
-                                    child: OutlinedButton.icon(
-                                      onPressed: () => _verOrden(o),
-                                      icon: const Icon(Icons.qr_code_rounded, size: 16),
-                                      label: const Text('Ver', style: TextStyle(fontSize: 12)),
-                                      style: OutlinedButton.styleFrom(
-                                        foregroundColor: AppTheme.gray600,
-                                        side: const BorderSide(color: AppTheme.gray200),
-                                        padding: const EdgeInsets.symmetric(vertical: 6),
-                                        shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(8)),
-                                      ),
+                          ),
+                          child: Column(
+                            children: [
+                              // Banner de alerta si está vencida
+                              if (vencida)
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.red,
+                                    borderRadius: const BorderRadius.only(
+                                      topLeft: Radius.circular(11),
+                                      topRight: Radius.circular(11),
                                     ),
                                   ),
-
-                                  if (puedeEditar) ...[
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: OutlinedButton.icon(
-                                        onPressed: () => _abrirEditarOrden(o),
-                                        icon: const Icon(Icons.edit_outlined, size: 16),
-                                        label: const Text('Editar',
-                                            style: TextStyle(fontSize: 12)),
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor: AppTheme.orange,
-                                          side: const BorderSide(
-                                              color: AppTheme.orangeBorder),
-                                          padding:
-                                          const EdgeInsets.symmetric(vertical: 6),
-                                          shape: RoundedRectangleBorder(
-                                              borderRadius: BorderRadius.circular(8)),
+                                  child: const Row(
+                                    children: [
+                                      Icon(Icons.warning_amber_rounded, color: Colors.white, size: 14),
+                                      SizedBox(width: 6),
+                                      Text(
+                                        'Orden pendiente de pago (+2 días)',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
                                         ),
                                       ),
+                                    ],
+                                  ),
+                                ),
+                              ListTile(
+                                contentPadding:
+                                const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                leading: Container(
+                                  width: 44, height: 44,
+                                  decoration: BoxDecoration(
+                                      color: vencida ? AppTheme.redLight : _bgEstado(estado),
+                                      borderRadius: BorderRadius.circular(10)),
+                                  child: Icon(Icons.receipt_long_rounded,
+                                      color: vencida ? AppTheme.red : _colorEstado(estado), size: 22),
+                                ),
+                                title: Text('#${o['numero_ticket'] ?? '—'}',
+                                    style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        color: vencida ? AppTheme.red : AppTheme.dark)),
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Total: \$${o['total'] ?? '0.00'}',
+                                      style: const TextStyle(
+                                          fontSize: 12, color: AppTheme.gray600),
                                     ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: OutlinedButton.icon(
-                                        onPressed: () => _eliminarOrden(o),
-                                        icon: const Icon(Icons.delete_outline_rounded,
-                                            size: 16),
-                                        label: const Text('Eliminar',
-                                            style: TextStyle(fontSize: 12)),
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor: AppTheme.red,
-                                          side: const BorderSide(color: AppTheme.red),
-                                          padding:
-                                          const EdgeInsets.symmetric(vertical: 6),
-                                          shape: RoundedRectangleBorder(
-                                              borderRadius: BorderRadius.circular(8)),
-                                        ),
+                                    if (fechaTexto.isNotEmpty)
+                                      Row(
+                                        children: [
+                                          Icon(
+                                            Icons.calendar_today_outlined,
+                                            size: 10,
+                                            color: vencida ? AppTheme.red : AppTheme.gray400,
+                                          ),
+                                          const SizedBox(width: 3),
+                                          Text(
+                                            fechaTexto,
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: vencida ? AppTheme.red : AppTheme.gray400,
+                                              fontWeight: vencida ? FontWeight.w600 : FontWeight.normal,
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                    ),
                                   ],
-                                ],
+                                ),
+                                trailing: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                      color: vencida ? AppTheme.redLight : _bgEstado(estado),
+                                      borderRadius: BorderRadius.circular(20)),
+                                  child: Text(estado,
+                                      style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                          color: vencida ? AppTheme.red : _colorEstado(estado))),
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ),
+
+                              // ── Botones de acción ──
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                                child: Row(
+                                  children: [
+                                    // FIX 2: botón VER siempre visible
+                                    Expanded(
+                                      child: OutlinedButton.icon(
+                                        onPressed: () => _verOrden(o),
+                                        icon: const Icon(Icons.qr_code_rounded, size: 16),
+                                        label: const Text('Ver', style: TextStyle(fontSize: 12)),
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: AppTheme.gray600,
+                                          side: const BorderSide(color: AppTheme.gray200),
+                                          padding: const EdgeInsets.symmetric(vertical: 6),
+                                          shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(8)),
+                                        ),
+                                      ),
+                                    ),
+
+                                    if (puedeEditar) ...[
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: OutlinedButton.icon(
+                                          onPressed: () => _abrirEditarOrden(o),
+                                          icon: const Icon(Icons.edit_outlined, size: 16),
+                                          label: const Text('Editar',
+                                              style: TextStyle(fontSize: 12)),
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: AppTheme.orange,
+                                            side: const BorderSide(
+                                                color: AppTheme.orangeBorder),
+                                            padding:
+                                            const EdgeInsets.symmetric(vertical: 6),
+                                            shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.circular(8)),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: OutlinedButton.icon(
+                                          onPressed: () => _eliminarOrden(o),
+                                          icon: const Icon(Icons.delete_outline_rounded,
+                                              size: 16),
+                                          label: const Text('Eliminar',
+                                              style: TextStyle(fontSize: 12)),
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: AppTheme.red,
+                                            side: const BorderSide(color: AppTheme.red),
+                                            padding:
+                                            const EdgeInsets.symmetric(vertical: 6),
+                                            shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.circular(8)),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
                     );
                   },
                 ),
@@ -607,7 +689,7 @@ class _VerOrdenSheetState extends State<_VerOrdenSheet> {
     final o = widget.orden;
     final estado = o['estado'] ?? 'Generada';
     final qrCodigo = o['qr_codigo'] as String?;
-    final esGenerada = estado == 'Generada';
+    final esGenerada = estado == 'Generada' || estado == 'Pagada';
 
     return Container(
       height: MediaQuery.of(context).size.height * 0.88,
@@ -700,30 +782,55 @@ class _VerOrdenSheetState extends State<_VerOrdenSheet> {
                       ),
                     ),
                     const SizedBox(height: 10),
-                    // Aviso 5 días
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: AppTheme.amberLight,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                            color: AppTheme.amber.withOpacity(0.4)),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.timer_outlined,
-                              color: AppTheme.amber, size: 16),
-                          const SizedBox(width: 8),
-                          const Expanded(
-                            child: Text(
-                              'Presenta este QR al llegar. Si no cancelas en 5 días, la orden se eliminará automáticamente.',
-                              style: TextStyle(fontSize: 11, color: AppTheme.dark),
+                    // Aviso según estado
+                    if (estado == 'Generada')
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: AppTheme.amberLight,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: AppTheme.amber.withOpacity(0.4)),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.timer_outlined,
+                                color: AppTheme.amber, size: 16),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                'Presenta este QR al llegar. Si no cancelas en 5 días, la orden se eliminará automáticamente.',
+                                style: TextStyle(fontSize: 11, color: AppTheme.dark),
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
+                      )
+                    else if (estado == 'Pagada')
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: AppTheme.blueLight,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: AppTheme.blue.withOpacity(0.3)),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.check_circle_outline_rounded,
+                                color: AppTheme.blue, size: 16),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                'Orden pagada. Presenta este QR para la toma de muestras.',
+                                style: TextStyle(fontSize: 11, color: AppTheme.dark),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
                     const SizedBox(height: 20),
                   ],
 
@@ -958,8 +1065,13 @@ class _NuevaOrdenSheetState extends State<_NuevaOrdenSheet> {
   }
 
   Future<void> _confirmarOrden() async {
-    if (_seleccionados.isEmpty) return;
+    // ✅ FIX: guard de re-entrancia. El OverlayEntry del carrito no se
+    // redibuja solo con setState (necesita markNeedsBuild), así que el
+    // botón podía quedar "habilitado" visualmente mientras _creando ya
+    // era true, permitiendo doble-tap → dos órdenes creadas en el backend.
+    if (_seleccionados.isEmpty || _creando) return;
     setState(() { _creando = true; _error = ''; });
+    _carritoOverlay?.markNeedsBuild(); // fuerza que el overlay muestre el botón deshabilitado/spinner
 
     try {
       final examenes = _seleccionados.values
@@ -985,6 +1097,7 @@ class _NuevaOrdenSheetState extends State<_NuevaOrdenSheet> {
 
       // ✅ Siempre limpiar _creando primero
       setState(() => _creando = false);
+      _carritoOverlay?.markNeedsBuild();
 
       if (res['error'] != null) {
         setState(() => _error = res['error'] ?? 'Error al procesar la orden.');
@@ -1003,7 +1116,10 @@ class _NuevaOrdenSheetState extends State<_NuevaOrdenSheet> {
       );
 
     } catch (e) {
-      if (mounted) setState(() { _creando = false; _error = 'Error inesperado: $e'; });
+      if (mounted) {
+        setState(() { _creando = false; _error = 'Error inesperado: $e'; });
+        _carritoOverlay?.markNeedsBuild();
+      }
     }
   }
 
@@ -1318,6 +1434,8 @@ class _NuevaOrdenSheetState extends State<_NuevaOrdenSheet> {
             style: const TextStyle(fontSize: 13, color: AppTheme.gray400),
           ));
     }
+
+
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       itemCount: lista.length,
