@@ -1,5 +1,5 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
 import '../widgets/logo_header.dart';
@@ -17,23 +17,26 @@ class _RegistroScreenState extends State<RegistroScreen> {
   final _cedulaCtrl     = TextEditingController();
   final _correoCtrl     = TextEditingController();
   final _telCtrl        = TextEditingController();
-  final _dirCtrl        = TextEditingController(); // <- AGREGADO
-  final _fechaNacCtrl   = TextEditingController(); // <- AGREGADO
-  final _userCtrl       = TextEditingController();
-  final _passCtrl       = TextEditingController();
+  final _dirCtrl        = TextEditingController();
+  final _fechaNacCtrl   = TextEditingController();
+  final _cedulaFocus    = FocusNode();
 
   String _genero = 'M';
   bool _loading  = false;
-  bool _verPass  = false;
   String _error  = '';
   String _exito  = '';
 
-  // Requisitos de contraseña en tiempo real
-  bool get _passTieneLongitud  => _passCtrl.text.length >= 8;
-  bool get _passTieneMayuscula => _passCtrl.text.contains(RegExp(r'[A-Z]'));
-  bool get _passTieneMinuscula => _passCtrl.text.contains(RegExp(r'[a-z]'));
-  bool get _passTieneNumero    => _passCtrl.text.contains(RegExp(r'[0-9]'));
-  bool get _passTieneEspecial  => _passCtrl.text.contains(RegExp(r'[!@#\$%^&*(),.?":{}|<>_\-]'));
+  // ── Estado de la verificación de cédula ─────────────────────────────────
+  bool _verificandoCedula = false;
+  // true si la cédula ya pertenece a un PACIENTE existente: bloquea el registro
+  bool _cedulaBloqueada = false;
+  // true si la cédula ya pertenece a una cuenta con otro rol (ej. personal del
+  // laboratorio): se le suma el rol Paciente sin generar credenciales nuevas
+  bool _usuarioExistente = false;
+
+  // Credenciales generadas automáticamente al registrar (se muestran en la
+  // pantalla de éxito para que el paciente las guarde, ya que él no las elige)
+  Map<String, String>? _credencialesGeneradas;
 
   @override
   void dispose() {
@@ -44,19 +47,200 @@ class _RegistroScreenState extends State<RegistroScreen> {
     _telCtrl.dispose();
     _dirCtrl.dispose();
     _fechaNacCtrl.dispose();
-    _userCtrl.dispose();
-    _passCtrl.dispose();
+    _cedulaFocus.dispose();
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
-    // Actualizar indicadores de contraseña en tiempo real
-    _passCtrl.addListener(() => setState(() {}));
+    _cedulaFocus.addListener(() {
+      if (!_cedulaFocus.hasFocus) _verificarCedula();
+    });
   }
 
-  // Función para seleccionar la fecha de nacimiento cómodamente
+  // ── Quita tildes básicas (á->a, ñ->n, etc.) sin depender de paquetes extra ─
+  String _quitarAcentos(String texto) {
+    const conAcentos = 'áéíóúÁÉÍÓÚñÑüÜ';
+    const sinAcentos = 'aeiouAEIOUnNuU';
+    var resultado = texto;
+    for (int i = 0; i < conAcentos.length; i++) {
+      resultado = resultado.replaceAll(conAcentos[i], sinAcentos[i]);
+    }
+    return resultado;
+  }
+
+  String _limpiarPrimeraPalabra(String texto) {
+    final sinAcentos = _quitarAcentos(texto);
+    final partes = sinAcentos.trim().toLowerCase().split(RegExp(r'\s+'));
+    if (partes.isEmpty) return '';
+    return partes.first.replaceAll(RegExp(r'[^a-z]'), '');
+  }
+
+  // Genera un username legible: nombre + inicial de apellido + 3 dígitos de
+  // la cédula (ej. "jennyg268"), igual que en la gestión web de pacientes.
+  String _generarUsername(String nombres, String apellidos, String cedula) {
+    final primerNombre = _limpiarPrimeraPalabra(nombres);
+    final apellidoLimpio = _limpiarPrimeraPalabra(apellidos);
+    final inicialApellido = apellidoLimpio.isNotEmpty ? apellidoLimpio[0] : '';
+    final soloDigitos = cedula.replaceAll(RegExp(r'\D'), '');
+    final sufijoCedula = soloDigitos.length >= 3
+        ? soloDigitos.substring(soloDigitos.length - 3)
+        : soloDigitos;
+    final base = '$primerNombre$inicialApellido';
+    return '${base.isEmpty ? "usuario" : base}$sufijoCedula';
+  }
+
+  // Contraseña temporal legible (sin caracteres ambiguos como 0/O, 1/l/I)
+  String _generarPasswordTemporal() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+    final rnd = Random.secure();
+    return List.generate(8, (_) => chars[rnd.nextInt(chars.length)]).join();
+  }
+
+  // ── Verifica la cédula apenas el usuario sale del campo ─────────────────
+  Future<void> _verificarCedula() async {
+    final cedula = _cedulaCtrl.text.trim();
+    if (!RegExp(r'^\d{10}$').hasMatch(cedula)) return;
+
+    setState(() {
+      _verificandoCedula = true;
+      _cedulaBloqueada = false;
+      _usuarioExistente = false;
+      _error = '';
+    });
+
+    final res = await AuthService.verificarCedula(cedula);
+
+    if (res['existe'] == true) {
+      if (res['esPaciente'] == true) {
+        setState(() {
+          _cedulaBloqueada = true;
+          _error = 'Esta cédula ya está registrada como paciente. Si es tuya, '
+              'inicia sesión en vez de crear una cuenta nueva.';
+          _verificandoCedula = false;
+        });
+        return;
+      }
+      // Existe con otro rol (ej. personal del laboratorio): no se toca su
+      // cuenta actual, solo se le sumará el rol de Paciente al guardar.
+      setState(() {
+        _usuarioExistente = true;
+        _verificandoCedula = false;
+      });
+      return;
+    }
+
+    // No existe en el sistema aún → autocompletar nombres/apellidos con el SRI
+    final sri = await AuthService.consultarSRI(cedula);
+    if (sri['encontrado'] == true) {
+      setState(() {
+        if (_nombresCtrl.text.trim().isEmpty) {
+          _nombresCtrl.text = sri['nombres'] ?? '';
+        }
+        if (_apellidosCtrl.text.trim().isEmpty) {
+          _apellidosCtrl.text = sri['apellidos'] ?? '';
+        }
+      });
+    }
+    setState(() => _verificandoCedula = false);
+  }
+
+  Future<void> _registrar() async {
+    if (_cedulaBloqueada) {
+      setState(() => _error = 'Esta cédula ya está registrada como paciente.');
+      return;
+    }
+    if (_nombresCtrl.text.isEmpty || _apellidosCtrl.text.isEmpty ||
+        _cedulaCtrl.text.isEmpty  || _correoCtrl.text.isEmpty ||
+        _fechaNacCtrl.text.isEmpty || _dirCtrl.text.isEmpty) {
+      setState(() => _error = 'Completa todos los campos obligatorios (*).');
+      return;
+    }
+
+    if (_cedulaCtrl.text.trim().length != 10 ||
+        !RegExp(r'^\d{10}$').hasMatch(_cedulaCtrl.text.trim())) {
+      setState(() => _error = 'La cédula debe tener exactamente 10 dígitos.');
+      return;
+    }
+
+    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(_correoCtrl.text.trim())) {
+      setState(() => _error = 'Ingresa un correo electrónico válido.');
+      return;
+    }
+
+    setState(() { _loading = true; _error = ''; _exito = ''; });
+
+    final datosBase = <String, dynamic>{
+      'nombres'         : _nombresCtrl.text.trim(),
+      'apellidos'       : _apellidosCtrl.text.trim(),
+      'cedula'          : _cedulaCtrl.text.trim(),
+      'correo'          : _correoCtrl.text.trim(),
+      'telefono'        : _telCtrl.text.trim().isEmpty ? null : _telCtrl.text.trim(),
+      'direccion'       : _dirCtrl.text.trim(),
+      'fecha_nacimiento': _fechaNacCtrl.text.trim(),
+      'genero'          : _genero,
+    };
+
+    Map<String, dynamic> res;
+    String? usuarioGenerado;
+    String? passwordGenerado;
+
+    if (_usuarioExistente) {
+      // La cédula ya pertenece a una cuenta existente: no se generan
+      // credenciales nuevas, el backend conserva las que ya tenía.
+      res = await AuthService.registrarPaciente(datosBase);
+    } else {
+      usuarioGenerado = _generarUsername(
+          _nombresCtrl.text, _apellidosCtrl.text, _cedulaCtrl.text);
+      passwordGenerado = _generarPasswordTemporal();
+
+      res = await AuthService.registrarPaciente({
+        ...datosBase,
+        'username': usuarioGenerado,
+        'password': passwordGenerado,
+      });
+
+      // Si por coincidencia ese username ya está en uso, reintenta una vez
+      // con un sufijo numérico (igual que en la gestión web de pacientes).
+      final mensaje = (res['error'] ?? res['msg'] ?? '').toString().toLowerCase();
+      if (mensaje.contains('usuario ya está en uso') ||
+          mensaje.contains('nombre de usuario ya')) {
+        final sufijo = (10 + Random().nextInt(80)).toString();
+        usuarioGenerado = '$usuarioGenerado$sufijo';
+        res = await AuthService.registrarPaciente({
+          ...datosBase,
+          'username': usuarioGenerado,
+          'password': passwordGenerado,
+        });
+      }
+    }
+
+    setState(() => _loading = false);
+
+    if (res['msg'] != null || res['id_usuario'] != null) {
+      setState(() {
+        if (_usuarioExistente) {
+          _credencialesGeneradas = null;
+          _exito = 'Tu cédula ya tenía una cuenta en el sistema; le agregamos '
+              'el acceso de Paciente. Ingresa con tu usuario y contraseña '
+              'actuales, no cambiaron.';
+        } else {
+          _credencialesGeneradas = {
+            'username': usuarioGenerado!,
+            'password': passwordGenerado!,
+          };
+          _exito = '¡Cuenta creada exitosamente! Guarda tu usuario y '
+              'contraseña, los necesitarás para iniciar sesión. Si no '
+              'inicias sesión dentro de 1 mes, tu cuenta estará inactiva y '
+              'deberás acercarte al laboratorio para activarla.';
+        }
+      });
+    } else {
+      setState(() => _error = res['error'] ?? 'Error al registrarse.');
+    }
+  }
+
   Future<void> _seleccionarFecha(BuildContext context) async {
     final DateTime? seleccionado = await showDatePicker(
       context: context,
@@ -68,63 +252,9 @@ class _RegistroScreenState extends State<RegistroScreen> {
 
     if (seleccionado != null) {
       setState(() {
-        // Formato estricto YYYY-MM-DD requerido por PostgreSQL
         _fechaNacCtrl.text =
         "${seleccionado.year}-${seleccionado.month.toString().padLeft(2, '0')}-${seleccionado.day.toString().padLeft(2, '0')}";
       });
-    }
-  }
-
-  Future<void> _registrar() async {
-    if (_nombresCtrl.text.isEmpty || _apellidosCtrl.text.isEmpty ||
-        _cedulaCtrl.text.isEmpty  || _correoCtrl.text.isEmpty ||
-        _fechaNacCtrl.text.isEmpty || _dirCtrl.text.isEmpty ||
-        _userCtrl.text.isEmpty    || _passCtrl.text.isEmpty) {
-      setState(() => _error = 'Completa todos los campos obligatorios (*).');
-      return;
-    }
-
-    // Validar cédula: exactamente 10 dígitos numéricos
-    if (_cedulaCtrl.text.trim().length != 10 || !RegExp(r'^\d{10}$').hasMatch(_cedulaCtrl.text.trim())) {
-      setState(() => _error = 'La cédula debe tener exactamente 10 dígitos.');
-      return;
-    }
-
-    // Validar formato de correo
-    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(_correoCtrl.text.trim())) {
-      setState(() => _error = 'Ingresa un correo electrónico válido.');
-      return;
-    }
-
-    // Validar contraseña con todos los requisitos
-    if (!_passTieneLongitud || !_passTieneMayuscula || !_passTieneMinuscula ||
-        !_passTieneNumero   || !_passTieneEspecial) {
-      setState(() => _error = 'La contraseña no cumple los requisitos de seguridad indicados.');
-      return;
-    }
-
-    setState(() { _loading = true; _error = ''; _exito = ''; });
-
-    // Enviamos el objeto JSON exacto que espera pacienteController.registrarPaciente
-    final res = await AuthService.registrarPaciente({
-      'nombres'         : _nombresCtrl.text.trim(),
-      'apellidos'       : _apellidosCtrl.text.trim(),
-      'cedula'          : _cedulaCtrl.text.trim(),
-      'correo'          : _correoCtrl.text.trim(),
-      'telefono': _telCtrl.text.trim().isEmpty ? null : _telCtrl.text.trim(),
-      'direccion'       : _dirCtrl.text.trim(),       // <- ENVIADO
-      'fecha_nacimiento': _fechaNacCtrl.text.trim(), // <- ENVIADO
-      'username'        : _userCtrl.text.trim(),
-      'password'        : _passCtrl.text,
-      'genero'          : _genero,
-    });
-
-    setState(() => _loading = false);
-
-    if (res['msg'] != null || res['id_usuario'] != null) {
-      setState(() => _exito = '¡Cuenta creada exitosamente! Ya puedes iniciar sesión. Si no inicias sesión dentro de 1 mes, tu cuenta estará inactiva y deberas acercarte al laboratorio para activarla y poder usarla en al aplicación.');
-    } else {
-      setState(() => _error = res['error'] ?? 'Error al registrarse.');
     }
   }
 
@@ -159,6 +289,35 @@ class _RegistroScreenState extends State<RegistroScreen> {
                       style: const TextStyle(color: AppTheme.green, fontSize: 13))),
                 ]),
               ),
+              if (_credencialesGeneradas != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF7ED),
+                    border: Border.all(color: const Color(0xFFFDBA74), width: 1.5),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Tus credenciales de acceso',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppTheme.dark)),
+                      const SizedBox(height: 8),
+                      Text('Usuario: ${_credencialesGeneradas!['username']}',
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.dark)),
+                      const SizedBox(height: 4),
+                      Text('Contraseña: ${_credencialesGeneradas!['password']}',
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.dark)),
+                      const SizedBox(height: 8),
+                      const Text('Guárdalos ahora: no se volverán a mostrar. '
+                          'Puedes cambiar tu contraseña más tarde desde tu perfil.',
+                          style: TextStyle(fontSize: 11, color: AppTheme.gray600)),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
               ElevatedButton(
                 onPressed: () => Navigator.pop(context),
@@ -176,15 +335,46 @@ class _RegistroScreenState extends State<RegistroScreen> {
               const SizedBox(height: 12),
 
               _label('Cédula *'),
-              TextField(controller: _cedulaCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Número de cédula')),
+              TextField(
+                controller: _cedulaCtrl,
+                focusNode: _cedulaFocus,
+                keyboardType: TextInputType.number,
+                onEditingComplete: _verificarCedula,
+                decoration: InputDecoration(
+                  labelText: 'Número de cédula',
+                  suffixIcon: _verificandoCedula
+                      ? const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: SizedBox(
+                        height: 16, width: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                  )
+                      : null,
+                ),
+              ),
+              if (_usuarioExistente) ...[
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                      color: AppTheme.orangeLight,
+                      borderRadius: BorderRadius.circular(8)),
+                  child: const Text(
+                    'Esta cédula ya tiene una cuenta en el sistema (por ejemplo, '
+                        'personal del laboratorio). Al continuar solo se te dará acceso '
+                        'de Paciente: no se generarán usuario ni contraseña nuevos, '
+                        'sigue usando los que ya tienes.',
+                    style: TextStyle(fontSize: 11, color: AppTheme.dark),
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
 
               _label('Fecha de Nacimiento *'),
               TextField(
                 controller: _fechaNacCtrl,
-                readOnly: true, // Evita que escriban texto manual roto
+                readOnly: true,
                 onTap: () => _seleccionarFecha(context),
                 decoration: const InputDecoration(
                   labelText: 'YYYY-MM-DD',
@@ -217,41 +407,22 @@ class _RegistroScreenState extends State<RegistroScreen> {
                 _genderBtn('F', 'Femenino'),
                 const SizedBox(width: 10),
               ]),
-              const SizedBox(height: 12),
 
-              _label('Usuario *'),
-              TextField(
-                controller: _userCtrl,
-                inputFormatters: [
-                  // Solo letras, números y guión bajo — sin espacios ni símbolos
-                  FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z0-9_]')),
-                ],
-                decoration: const InputDecoration(
-                  labelText: 'Solo letras, números y _  (sin espacios)',
-                  prefixIcon: Icon(Icons.alternate_email_rounded, size: 20, color: AppTheme.gray400),
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              _label('Contraseña *'),
-              TextField(
-                controller: _passCtrl,
-                obscureText: !_verPass,
-                decoration: InputDecoration(
-                  labelText: 'Mín. 8 caracteres con mayúscula, número y carácter especial',
-                  suffixIcon: IconButton(
-                    icon: Icon(_verPass
-                        ? Icons.visibility_off_outlined
-                        : Icons.visibility_outlined,
-                        color: AppTheme.gray400, size: 20),
-                    onPressed: () => setState(() => _verPass = !_verPass),
+              if (!_usuarioExistente) ...[
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                      color: const Color(0xFFF8F8F8),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: AppTheme.gray200)),
+                  child: const Text(
+                    'Tu usuario y contraseña se generarán automáticamente al '
+                        'crear la cuenta y se te mostrarán al final.',
+                    style: TextStyle(fontSize: 11, color: AppTheme.gray600),
                   ),
                 ),
-              ),
-              // Indicadores de seguridad en tiempo real
-              if (_passCtrl.text.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                _buildRequisitosPassword(),
               ],
 
               if (_error.isNotEmpty) ...[
@@ -276,7 +447,7 @@ class _RegistroScreenState extends State<RegistroScreen> {
               const SizedBox(height: 24),
 
               ElevatedButton(
-                onPressed: _loading ? null : _registrar,
+                onPressed: (_loading || _cedulaBloqueada) ? null : _registrar,
                 child: _loading
                     ? const SizedBox(height: 22, width: 22,
                     child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
@@ -286,50 +457,6 @@ class _RegistroScreenState extends State<RegistroScreen> {
             ],
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildRequisitosPassword() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8F8F8),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.gray200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Requisitos de seguridad:',
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.gray600)),
-          const SizedBox(height: 6),
-          _reqItem('Mínimo 8 caracteres',                      _passTieneLongitud),
-          _reqItem('Al menos una mayúscula (A-Z)',              _passTieneMayuscula),
-          _reqItem('Al menos una minúscula (a-z)',              _passTieneMinuscula),
-          _reqItem('Al menos un número (0-9)',                  _passTieneNumero),
-          _reqItem('Al menos un carácter especial (!@#\$...)', _passTieneEspecial),
-        ],
-      ),
-    );
-  }
-
-  Widget _reqItem(String label, bool cumple) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Icon(
-            cumple ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
-            color: cumple ? AppTheme.green : AppTheme.gray400,
-            size: 14,
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(label,
-                style: TextStyle(fontSize: 11, color: cumple ? AppTheme.green : AppTheme.gray400)),
-          ),
-        ],
       ),
     );
   }

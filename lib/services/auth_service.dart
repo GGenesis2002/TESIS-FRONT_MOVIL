@@ -49,6 +49,39 @@ class AuthService {
     }
   }
 
+  // Base sin '/api', para endpoints montados en la raíz del backend (ej. /documento)
+  static String get _baseRoot => _base.replaceFirst(RegExp(r'/api$'), '');
+
+  // ── VERIFICAR CÉDULA (público, para el registro) ───────
+  // Solo confirma si la cédula ya existe en el sistema y si ya tiene el rol
+  // Paciente. No expone datos personales de nadie.
+  static Future<Map<String, dynamic>> verificarCedula(String cedula) async {
+    try {
+      final res = await http
+          .get(Uri.parse('$_base/pacientes/verificar-cedula/$cedula'))
+          .timeout(_timeout);
+      return jsonDecode(res.body);
+    } on TimeoutException {
+      return {'error': 'El servidor tardó demasiado. Verifica tu conexión.'};
+    } catch (e) {
+      return {'error': 'Error de conexión: $e'};
+    }
+  }
+
+  // ── CONSULTAR SRI (autocompletar nombres/apellidos por cédula) ─
+  static Future<Map<String, dynamic>> consultarSRI(String cedula) async {
+    try {
+      final res = await http
+          .get(Uri.parse('$_baseRoot/documento/consultar/$cedula'))
+          .timeout(_timeout);
+      return jsonDecode(res.body);
+    } on TimeoutException {
+      return {'error': 'El servidor tardó demasiado. Verifica tu conexión.'};
+    } catch (e) {
+      return {'error': 'Error de conexión: $e'};
+    }
+  }
+
   // ── EDITAR PERFIL PROPIO ───────────────────────────────
   static Future<Map<String, dynamic>> editarPerfil(
       String token, Map<String, dynamic> datos) async {
