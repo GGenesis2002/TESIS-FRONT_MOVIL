@@ -151,30 +151,87 @@ class _RegistroScreenState extends State<RegistroScreen> {
       setState(() => _error = 'Esta cédula ya está registrada como paciente.');
       return;
     }
-    if (_nombresCtrl.text.isEmpty || _apellidosCtrl.text.isEmpty ||
-        _cedulaCtrl.text.isEmpty  || _correoCtrl.text.isEmpty ||
-        _fechaNacCtrl.text.isEmpty || _dirCtrl.text.isEmpty) {
-      setState(() => _error = 'Completa todos los campos obligatorios (*).');
-      return;
-    }
 
-    if (_cedulaCtrl.text.trim().length != 10 ||
-        !RegExp(r'^\d{10}$').hasMatch(_cedulaCtrl.text.trim())) {
+    final cedulaActual = _cedulaCtrl.text.trim();
+    if (cedulaActual.isEmpty ||
+        cedulaActual.length != 10 ||
+        !RegExp(r'^\d{10}$').hasMatch(cedulaActual)) {
       setState(() => _error = 'La cédula debe tener exactamente 10 dígitos.');
       return;
     }
-
-    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(_correoCtrl.text.trim())) {
-      setState(() => _error = 'Ingresa un correo electrónico válido.');
+    // Estos dos son datos de la tabla paciente: siempre obligatorios, sin
+    // importar si la cuenta ya existía con otro rol o es totalmente nueva.
+    if (_fechaNacCtrl.text.isEmpty || _dirCtrl.text.isEmpty) {
+      setState(() => _error = 'Completa todos los campos obligatorios (*).');
       return;
     }
 
     setState(() { _loading = true; _error = ''; _exito = ''; });
 
+    // ── Chequeo de seguridad justo antes de enviar ──────────────────────
+    // No confiamos solo en el aviso que se mostró al salir del campo cédula
+    // (pudo no haberse disparado a tiempo). Volvemos a consultar aquí mismo,
+    // con el resultado fresco, para decidir qué campos exigir y si se
+    // generan credenciales nuevas o no.
+    final estadoCedula = await AuthService.verificarCedula(cedulaActual);
+
+    // Si la consulta falló (servidor caído, sin internet, o la ruta nueva del
+    // backend todavía no está desplegada), NO asumimos que la cédula es
+    // nueva: sería peligroso generar credenciales sin saber si ya existía una
+    // cuenta. Avisamos y detenemos el registro.
+    if (estadoCedula['error'] != null) {
+      setState(() {
+        _loading = false;
+        _error = 'No se pudo verificar tu cédula (${estadoCedula['error']}). '
+            'Intenta de nuevo en unos segundos.';
+      });
+      return;
+    }
+
+    final bool cedulaBloqueadaFresca = estadoCedula['esPaciente'] == true;
+    final bool usuarioExistenteFresco =
+        estadoCedula['existe'] == true && estadoCedula['esPaciente'] != true;
+
+    setState(() {
+      _cedulaBloqueada = cedulaBloqueadaFresca;
+      _usuarioExistente = usuarioExistenteFresco;
+    });
+
+    if (cedulaBloqueadaFresca) {
+      setState(() {
+        _loading = false;
+        _error = 'Esta cédula ya está registrada como paciente. Si es tuya, '
+            'inicia sesión en vez de crear una cuenta nueva.';
+      });
+      return;
+    }
+
+    // Nombres, apellidos y correo solo se piden (y se validan) cuando la
+    // cuenta es totalmente nueva. Si la cédula ya pertenece a alguien con
+    // otro rol, esos datos ya existen en la tabla usuario y el backend los
+    // ignora, así que no tiene sentido exigirlos aquí.
+    if (!usuarioExistenteFresco) {
+      if (_nombresCtrl.text.isEmpty || _apellidosCtrl.text.isEmpty ||
+          _correoCtrl.text.isEmpty) {
+        setState(() {
+          _loading = false;
+          _error = 'Completa todos los campos obligatorios (*).';
+        });
+        return;
+      }
+      if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(_correoCtrl.text.trim())) {
+        setState(() {
+          _loading = false;
+          _error = 'Ingresa un correo electrónico válido.';
+        });
+        return;
+      }
+    }
+
     final datosBase = <String, dynamic>{
       'nombres'         : _nombresCtrl.text.trim(),
       'apellidos'       : _apellidosCtrl.text.trim(),
-      'cedula'          : _cedulaCtrl.text.trim(),
+      'cedula'          : cedulaActual,
       'correo'          : _correoCtrl.text.trim(),
       'telefono'        : _telCtrl.text.trim().isEmpty ? null : _telCtrl.text.trim(),
       'direccion'       : _dirCtrl.text.trim(),
@@ -186,7 +243,7 @@ class _RegistroScreenState extends State<RegistroScreen> {
     String? usuarioGenerado;
     String? passwordGenerado;
 
-    if (_usuarioExistente) {
+    if (usuarioExistenteFresco) {
       // La cédula ya pertenece a una cuenta existente: no se generan
       // credenciales nuevas, el backend conserva las que ya tenía.
       res = await AuthService.registrarPaciente(datosBase);
@@ -220,7 +277,7 @@ class _RegistroScreenState extends State<RegistroScreen> {
 
     if (res['msg'] != null || res['id_usuario'] != null) {
       setState(() {
-        if (_usuarioExistente) {
+        if (usuarioExistenteFresco) {
           _credencialesGeneradas = null;
           _exito = 'Tu cédula ya tenía una cuenta en el sistema; le agregamos '
               'el acceso de Paciente. Ingresa con tu usuario y contraseña '
@@ -324,18 +381,9 @@ class _RegistroScreenState extends State<RegistroScreen> {
                 child: const Text('IR AL LOGIN'),
               ),
             ] else ...[
-              _label('Nombres *'),
-              TextField(controller: _nombresCtrl,
-                  decoration: const InputDecoration(labelText: 'Nombres completos')),
-              const SizedBox(height: 12),
-
-              _label('Apellidos *'),
-              TextField(controller: _apellidosCtrl,
-                  decoration: const InputDecoration(labelText: 'Apellidos completos')),
-              const SizedBox(height: 12),
-
               _label('Cédula *'),
               TextField(
+                key: const ValueKey('campo_cedula'),
                 controller: _cedulaCtrl,
                 focusNode: _cedulaFocus,
                 keyboardType: TextInputType.number,
@@ -352,6 +400,9 @@ class _RegistroScreenState extends State<RegistroScreen> {
                       : null,
                 ),
               ),
+              const SizedBox(height: 4),
+              const Text('Ingresa primero tu cédula: así podemos autocompletar tus datos.',
+                  style: TextStyle(fontSize: 11, color: AppTheme.gray400)),
               if (_usuarioExistente) ...[
                 const SizedBox(height: 8),
                 Container(
@@ -362,17 +413,34 @@ class _RegistroScreenState extends State<RegistroScreen> {
                       borderRadius: BorderRadius.circular(8)),
                   child: const Text(
                     'Esta cédula ya tiene una cuenta en el sistema (por ejemplo, '
-                        'personal del laboratorio). Al continuar solo se te dará acceso '
-                        'de Paciente: no se generarán usuario ni contraseña nuevos, '
-                        'sigue usando los que ya tienes.',
+                        'personal del laboratorio). Ya tenemos tus nombres, apellidos, '
+                        'correo, usuario y contraseña — no hace falta que los repitas. '
+                        'Solo completa los datos de abajo para tu perfil de paciente.',
                     style: TextStyle(fontSize: 11, color: AppTheme.dark),
                   ),
                 ),
+                const SizedBox(height: 12),
+              ] else ...[
+                const SizedBox(height: 12),
+
+                _label('Nombres *'),
+                TextField(
+                    key: const ValueKey('campo_nombres'),
+                    controller: _nombresCtrl,
+                    decoration: const InputDecoration(labelText: 'Nombres completos')),
+                const SizedBox(height: 12),
+
+                _label('Apellidos *'),
+                TextField(
+                    key: const ValueKey('campo_apellidos'),
+                    controller: _apellidosCtrl,
+                    decoration: const InputDecoration(labelText: 'Apellidos completos')),
+                const SizedBox(height: 12),
               ],
-              const SizedBox(height: 12),
 
               _label('Fecha de Nacimiento *'),
               TextField(
+                key: const ValueKey('campo_fecha_nac'),
                 controller: _fechaNacCtrl,
                 readOnly: true,
                 onTap: () => _seleccionarFecha(context),
@@ -383,20 +451,28 @@ class _RegistroScreenState extends State<RegistroScreen> {
               ),
               const SizedBox(height: 12),
 
-              _label('Correo electrónico *'),
-              TextField(controller: _correoCtrl,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(labelText: 'correo@ejemplo.com')),
-              const SizedBox(height: 12),
+              if (!_usuarioExistente) ...[
+                _label('Correo electrónico *'),
+                TextField(
+                    key: const ValueKey('campo_correo'),
+                    controller: _correoCtrl,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(labelText: 'correo@ejemplo.com')),
+                const SizedBox(height: 12),
+              ],
 
               _label('Teléfono / Celular'),
-              TextField(controller: _telCtrl,
+              TextField(
+                  key: const ValueKey('campo_telefono'),
+                  controller: _telCtrl,
                   keyboardType: TextInputType.phone,
                   decoration: const InputDecoration(labelText: '09XXXXXXXX')),
               const SizedBox(height: 12),
 
               _label('Dirección *'),
-              TextField(controller: _dirCtrl,
+              TextField(
+                  key: const ValueKey('campo_direccion'),
+                  controller: _dirCtrl,
                   decoration: const InputDecoration(labelText: 'Calle principal, secundaria y nro. casa')),
               const SizedBox(height: 12),
 
