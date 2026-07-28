@@ -30,10 +30,46 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _loading = false);
 
     if (res['token'] != null) {
-      await AuthService.guardarSesion(res['token'], res['user']);
+      final user = Map<String, dynamic>.from(res['user'] as Map);
+
+      // ── FIX: forzar el id_usuario_rol del rol "Paciente" ──────────────
+      // Esta app móvil es SOLO para pacientes. El backend devuelve como
+      // "rol principal" el primer resultado de una consulta SIN ORDER BY
+      // (usuario_rol.roles[0]), que puede no ser Paciente si la cuenta
+      // también tiene otros roles (ej. Técnico, Especialista, etc).
+      //
+      // Si guardáramos ese id_usuario_rol tal cual, la app mandaría el
+      // header x-id-usuario-rol equivocado en cada request y el backend
+      // devolvería notificaciones de OTRO rol de la cuenta (el bug que
+      // se estaba viendo: notificaciones de roles ajenos apareciendo
+      // en el móvil).
+      //
+      // Por eso aquí buscamos explícitamente, dentro de rolesConId, cuál
+      // id_usuario_rol corresponde al rol "Paciente" y lo usamos siempre,
+      // sin importar qué haya elegido el backend como rol principal.
+      final rolesConId = (user['rolesConId'] as List?) ?? [];
+
+      final rolPacienteRaw = rolesConId.firstWhere(
+            (r) => (r['nombre']?.toString().toLowerCase() ?? '') == 'paciente',
+        orElse: () => null,
+      );
+
+      if (rolPacienteRaw == null) {
+        setState(() {
+          _error = 'Esta cuenta no tiene un perfil de Paciente activo. '
+              'Ingresa desde el panel web si tu cuenta es de personal del laboratorio.';
+        });
+        return;
+      }
+
+      final rolPaciente = rolPacienteRaw as Map;
+      user['id_usuario_rol'] = rolPaciente['id_usuario_rol'];
+      user['rol'] = 'Paciente';
+
+      await AuthService.guardarSesion(res['token'], user);
       if (!mounted) return;
       Navigator.pushReplacement(context,
-          MaterialPageRoute(builder: (_) => HomeScreen(token: res['token'], user: res['user'])));
+          MaterialPageRoute(builder: (_) => HomeScreen(token: res['token'], user: user)));
     } else {
       setState(() => _error = res['message'] ?? res['error'] ?? 'Error al iniciar sesión.');
     }
@@ -102,7 +138,6 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 20),
 
-              // Links recuperación
               // Links recuperación
               Wrap(
                 alignment: WrapAlignment.center,

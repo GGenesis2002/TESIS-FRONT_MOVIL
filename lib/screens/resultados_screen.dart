@@ -32,10 +32,10 @@ class _ResultadosScreenState extends State<ResultadosScreen> {
   @override
   void initState() {
     super.initState();
-    _cargar();
-    // Auto-refresh cada 30 segundos
+    _cargar(); // primera carga: sí mostramos el spinner de pantalla completa
+    // Auto-refresh cada 30 segundos (silencioso, sin parpadeo de pantalla)
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted) _cargar();
+      if (mounted) _cargar(silencioso: true);
     });
   }
 
@@ -46,18 +46,25 @@ class _ResultadosScreenState extends State<ResultadosScreen> {
     super.dispose();
   }
 
-  Future<void> _cargar() async {
-    setState(() {
-      _loading = true;
-      _error = '';
-    });
+  // Si [silencioso] es true (auto-refresh en segundo plano o pull-to-refresh,
+  // que ya trae su propio indicador visual), no se muestra el loading de
+  // pantalla completa: la lista solo se actualiza "por debajo" cuando
+  // llegan los nuevos datos, para que no se note la actualización.
+  Future<void> _cargar({bool silencioso = false}) async {
+    if (!silencioso) {
+      setState(() {
+        _loading = true;
+        _error = '';
+      });
+    }
     final res = await AuthService.misOrdenes(widget.token);
-    setState(() => _loading = false);
+    if (!mounted) return;
+    if (!silencioso) setState(() => _loading = false);
     if (res['data'] != null) {
       final todas = res['data'] is List ? res['data'] as List : [];
       setState(() =>
       _ordenes = todas.where((o) => o['estado'] == 'Validado').toList());
-    } else {
+    } else if (!silencioso) {
       setState(() => _error = res['error'] ?? 'Error al cargar.');
     }
   }
@@ -124,7 +131,7 @@ class _ResultadosScreenState extends State<ResultadosScreen> {
                         fontSize: 14, color: AppTheme.gray400)),
               ]))
           : RefreshIndicator(
-        onRefresh: _cargar,
+        onRefresh: () => _cargar(silencioso: true),
         color: AppTheme.orange,
         child: Column(
           children: [
@@ -326,6 +333,7 @@ class _DetalleResultadosSheetState extends State<_DetalleResultadosSheet> {
     }
 
     final res = await AuthService.misResultados(widget.token, idOrden);
+    if (!mounted) return;
     setState(() => _loading = false);
 
     if (res['data'] == null) {

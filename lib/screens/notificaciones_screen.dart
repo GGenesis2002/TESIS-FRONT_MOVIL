@@ -19,10 +19,10 @@ class _NotificacionesScreenState extends State<NotificacionesScreen> {
   @override
   void initState() {
     super.initState();
-    _cargar();
-    // Auto-refresh cada 30 segundos
+    _cargar(); // primera carga: sí mostramos el spinner de pantalla completa
+    // Auto-refresh cada 30 segundos (silencioso, sin parpadeo de pantalla)
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted) _cargar();
+      if (mounted) _cargar(silencioso: true);
     });
   }
 
@@ -33,23 +33,34 @@ class _NotificacionesScreenState extends State<NotificacionesScreen> {
     super.dispose();
   }
 
-  Future<void> _cargar() async {
-    setState(() {
-      _loading = true;
-      _error = '';
-    });
+  // Si [silencioso] es true (auto-refresh en segundo plano), no se muestra
+  // el loading de pantalla completa ni se limpia el contenido actual:
+  // la lista solo se actualiza "por debajo" cuando llegan los nuevos datos,
+  // para que el usuario no note que se está actualizando.
+  Future<void> _cargar({bool silencioso = false}) async {
+    if (!silencioso) {
+      setState(() {
+        _loading = true;
+        _error = '';
+      });
+    }
     final sesion = await AuthService.leerSesion();
     final idUsuarioRol = sesion?['user']?['id_usuario_rol'] as int?;
     final res = await AuthService.misNotificaciones(widget.token, idUsuarioRol: idUsuarioRol);
-    setState(() => _loading = false);
+    if (!mounted) return;
+    if (!silencioso) setState(() => _loading = false);
+
     if (res['data'] != null) {
       final data = res['data'];
-
       setState(() {
         _notifs = data['notificaciones'] ?? [];
       });
-    }else {
-      setState(() => _error = res['error'] ?? 'Error al cargar notificaciones.');
+    } else {
+      // En modo silencioso no mostramos error de pantalla completa;
+      // simplemente se intenta de nuevo en el próximo ciclo.
+      if (!silencioso) {
+        setState(() => _error = res['error'] ?? 'Error al cargar notificaciones.');
+      }
     }
   }
 
@@ -234,7 +245,7 @@ class _NotificacionesScreenState extends State<NotificacionesScreen> {
   // ─── Lista principal con swipe para eliminar ──────────────────────────────
   Widget _buildLista() {
     return RefreshIndicator(
-      onRefresh: _cargar,
+      onRefresh: () => _cargar(silencioso: true),
       color: AppTheme.orange,
       child: ListView.builder(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -300,7 +311,7 @@ class _NotificacionesScreenState extends State<NotificacionesScreen> {
                 ? []
                 : [
               BoxShadow(
-                color: AppTheme.orange.withOpacity(0.08),
+                color: AppTheme.orange.withValues(alpha: 0.08),
                 blurRadius: 6,
                 offset: const Offset(0, 2),
               ),

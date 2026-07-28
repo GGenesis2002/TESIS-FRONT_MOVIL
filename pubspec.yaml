@@ -20,6 +20,7 @@ dependencies:
   path_provider: ^2.1.5
   share_plus: ^10.0.2
   open_filex: ^4.4.0
+  flutter_secure_storage: ^9.2.2
 
 dev_dependencies:
   flutter_test:

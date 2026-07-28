@@ -56,6 +56,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _hidratarPerfil() async {
     final res = await AuthService.obtenerPerfilCompleto(widget.token);
+    if (!mounted) return;
     if (res['perfil'] != null) {
       final perfil = res['perfil'] as Map<String, dynamic>;
       setState(() {
@@ -72,8 +73,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _cargarNotifNoLeidas() async {
-    final sesion = await AuthService.leerSesion();
-    final idUsuarioRol = sesion?['user']?['id_usuario_rol'] as int?;
+    // Ya tenemos id_usuario_rol en memoria (widget.user); no hace falta
+    // releer SharedPreferences en cada ciclo de polling (cada 30s).
+    final idUsuarioRol = widget.user['id_usuario_rol'] as int?;
     final res = await AuthService.misNotificaciones(widget.token, idUsuarioRol: idUsuarioRol);
     if (!mounted) return;
     if (res['data'] != null) {

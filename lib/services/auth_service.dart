@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class AuthService {
   static String get _base {
@@ -19,7 +20,11 @@ class AuthService {
           .post(
         Uri.parse('$_base/login/login'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'username': username, 'password': password}),
+        body: jsonEncode({
+          'username': username,
+          'password': password,
+          'origen': 'movil',
+        }),
       )
           .timeout(_timeout);
       return jsonDecode(res.body);
@@ -438,18 +443,38 @@ class AuthService {
   }
 
   // ── GUARDAR / LEER TOKEN LOCAL ─────────────────────────
+  // El token viaja en Authorization headers, así que se guarda cifrado
+  // (Keystore en Android / Keychain en iOS) usando flutter_secure_storage.
+  // El objeto `user` no contiene credenciales, así que se mantiene en
+  // SharedPreferences como antes.
+  static const _secureStorage = FlutterSecureStorage();
+
   static Future<void> guardarSesion(
       String token, Map<String, dynamic> user) async {
+    await _secureStorage.write(key: 'token', value: token);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('token', token);
     await prefs.setString('user', jsonEncode(user));
   }
 
   static Future<Map<String, dynamic>?> leerSesion() async {
+    final token = await _secureStorage.read(key: 'token');
     final prefs = await SharedPreferences.getInstance();
-    final token   = prefs.getString('token');
     final userStr = prefs.getString('user');
-    if (token == null || userStr == null) return null;
+
+    // Migración desde versión anterior: si existe un token viejo en
+    // SharedPreferences (texto plano), lo movemos a secure storage una
+    // sola vez y lo eliminamos del almacenamiento inseguro.
+    if (token == null) {
+      final tokenViejo = prefs.getString('token');
+      if (tokenViejo != null && userStr != null) {
+        await _secureStorage.write(key: 'token', value: tokenViejo);
+        await prefs.remove('token');
+        return {'token': tokenViejo, 'user': jsonDecode(userStr)};
+      }
+      return null;
+    }
+
+    if (userStr == null) return null;
     return {
       'token': token,
       'user': jsonDecode(userStr),
@@ -470,13 +495,14 @@ class AuthService {
           'Authorization': 'Bearer $token',
         },
         body: jsonEncode(datos),
-      );
+      ).timeout(_timeout);
       return jsonDecode(res.body);
+    } on TimeoutException {
+      return {'error': 'El servidor tardó demasiado. Verifica tu conexión.'};
     } catch (e) {
       return {'error': 'Error de conexión: $e'};
     }
   }
-
 
   // ── Marcar una notificación como leída ────────────────────────────────────────
   static Future<Map<String, dynamic>> leerNotificacion(
@@ -488,13 +514,15 @@ class AuthService {
           'Authorization': 'Bearer $token',
           'Content-Type': 'application/json',
         },
-      );
+      ).timeout(_timeout);
       if (response.statusCode == 200) {
         return {'data': jsonDecode(response.body)};
       }
       return {'error': 'Error ${response.statusCode}'};
+    } on TimeoutException {
+      return {'error': 'El servidor tardó demasiado. Verifica tu conexión.'};
     } catch (e) {
-      return {'error': e.toString()};
+      return {'error': 'Error de conexión: $e'};
     }
   }
 
@@ -508,13 +536,15 @@ class AuthService {
           'Authorization': 'Bearer $token',
           'Content-Type': 'application/json',
         },
-      );
+      ).timeout(_timeout);
       if (response.statusCode == 200) {
         return {'ok': true};
       }
       return {'error': 'Error ${response.statusCode}'};
+    } on TimeoutException {
+      return {'error': 'El servidor tardó demasiado. Verifica tu conexión.'};
     } catch (e) {
-      return {'error': e.toString()};
+      return {'error': 'Error de conexión: $e'};
     }
   }
 
@@ -533,14 +563,17 @@ class AuthService {
           'Authorization': 'Bearer $token',
         },
         body: jsonEncode({'actual': actual, 'nueva': nueva}),
-      );
+      ).timeout(_timeout);
       return jsonDecode(res.body);
+    } on TimeoutException {
+      return {'error': 'El servidor tardó demasiado. Verifica tu conexión.'};
     } catch (e) {
       return {'error': 'Error de conexión: $e'};
     }
   }
 
   static Future<void> cerrarSesion() async {
+    await _secureStorage.delete(key: 'token');
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
   }

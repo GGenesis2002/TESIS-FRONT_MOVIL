@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
@@ -19,7 +20,13 @@ class _RegistroScreenState extends State<RegistroScreen> {
   final _telCtrl        = TextEditingController();
   final _dirCtrl        = TextEditingController();
   final _fechaNacCtrl   = TextEditingController();
-  final _cedulaFocus    = FocusNode();
+
+  // Debounce para no disparar la verificación en cada tecla: espera un
+  // instante breve después del último dígito antes de consultar al backend.
+  Timer? _debounceCedula;
+  // Última cédula (10 dígitos) que ya se verificó, para no repetir la
+  // consulta si el texto no cambió realmente.
+  String? _ultimaCedulaVerificada;
 
   String _genero = 'M';
   bool _loading  = false;
@@ -47,15 +54,45 @@ class _RegistroScreenState extends State<RegistroScreen> {
     _telCtrl.dispose();
     _dirCtrl.dispose();
     _fechaNacCtrl.dispose();
-    _cedulaFocus.dispose();
+    _debounceCedula?.cancel();
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
-    _cedulaFocus.addListener(() {
-      if (!_cedulaFocus.hasFocus) _verificarCedula();
+    _cedulaCtrl.addListener(_onCedulaCambio);
+  }
+
+  // ── Se dispara con cada tecla que se escribe en el campo cédula ────────
+  void _onCedulaCambio() {
+    final cedula = _cedulaCtrl.text.trim();
+
+    // Si la cédula quedó incompleta (el usuario está borrando o corrigiendo),
+    // limpiamos cualquier aviso previo: no debe seguir mostrando "ya existe"
+    // para un número que ya no está completo.
+    if (!RegExp(r'^\d{10}$').hasMatch(cedula)) {
+      _debounceCedula?.cancel();
+      _ultimaCedulaVerificada = null;
+      if (_cedulaBloqueada || _usuarioExistente || _verificandoCedula || _error.isNotEmpty) {
+        setState(() {
+          _cedulaBloqueada = false;
+          _usuarioExistente = false;
+          _verificandoCedula = false;
+          _error = '';
+        });
+      }
+      return;
+    }
+
+    // Ya se verificó exactamente esta misma cédula: no repetir la consulta.
+    if (cedula == _ultimaCedulaVerificada) return;
+
+    // Debounce corto: espera a que el usuario termine de escribir el último
+    // dígito antes de consultar, así no se dispara una petición por tecla.
+    _debounceCedula?.cancel();
+    _debounceCedula = Timer(const Duration(milliseconds: 300), () {
+      _verificarCedula();
     });
   }
 
@@ -98,7 +135,7 @@ class _RegistroScreenState extends State<RegistroScreen> {
     return List.generate(8, (_) => chars[rnd.nextInt(chars.length)]).join();
   }
 
-  // ── Verifica la cédula apenas el usuario sale del campo ─────────────────
+  // ── Verifica en tiempo real si la cédula ya existe (sin autocompletar) ──
   Future<void> _verificarCedula() async {
     final cedula = _cedulaCtrl.text.trim();
     if (!RegExp(r'^\d{10}$').hasMatch(cedula)) return;
@@ -111,6 +148,12 @@ class _RegistroScreenState extends State<RegistroScreen> {
     });
 
     final res = await AuthService.verificarCedula(cedula);
+
+    // Si mientras esperaba la respuesta el usuario siguió editando y la
+    // cédula ya cambió, descartamos este resultado (ya no aplica).
+    if (_cedulaCtrl.text.trim() != cedula) return;
+
+    _ultimaCedulaVerificada = cedula;
 
     if (res['existe'] == true) {
       if (res['esPaciente'] == true) {
@@ -131,18 +174,8 @@ class _RegistroScreenState extends State<RegistroScreen> {
       return;
     }
 
-    // No existe en el sistema aún → autocompletar nombres/apellidos con el SRI
-    final sri = await AuthService.consultarSRI(cedula);
-    if (sri['encontrado'] == true) {
-      setState(() {
-        if (_nombresCtrl.text.trim().isEmpty) {
-          _nombresCtrl.text = sri['nombres'] ?? '';
-        }
-        if (_apellidosCtrl.text.trim().isEmpty) {
-          _apellidosCtrl.text = sri['apellidos'] ?? '';
-        }
-      });
-    }
+    // No existe en el sistema: simplemente se deja continuar el registro
+    // normal. Ya no se autocompletan nombres/apellidos con el SRI.
     setState(() => _verificandoCedula = false);
   }
 
@@ -385,11 +418,11 @@ class _RegistroScreenState extends State<RegistroScreen> {
               TextField(
                 key: const ValueKey('campo_cedula'),
                 controller: _cedulaCtrl,
-                focusNode: _cedulaFocus,
                 keyboardType: TextInputType.number,
-                onEditingComplete: _verificarCedula,
+                maxLength: 10,
                 decoration: InputDecoration(
                   labelText: 'Número de cédula',
+                  counterText: '',
                   suffixIcon: _verificandoCedula
                       ? const Padding(
                     padding: EdgeInsets.all(12),
@@ -401,7 +434,7 @@ class _RegistroScreenState extends State<RegistroScreen> {
                 ),
               ),
               const SizedBox(height: 4),
-              const Text('Ingresa primero tu cédula: así podemos autocompletar tus datos.',
+              const Text('Ingresa tu cédula: verificaremos automáticamente si ya tienes una cuenta.',
                   style: TextStyle(fontSize: 11, color: AppTheme.gray400)),
               if (_usuarioExistente) ...[
                 const SizedBox(height: 8),

@@ -46,7 +46,7 @@ class _RecuperarUsuarioScreenState extends State<RecuperarUsuarioScreen> {
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(18),
                     boxShadow: [BoxShadow(
-                        color: Colors.black.withOpacity(0.07),
+                        color: Colors.black.withValues(alpha: 0.07),
                         blurRadius: 16, offset: const Offset(0, 4))],
                   ),
                   padding: const EdgeInsets.all(20),
@@ -81,7 +81,7 @@ class _RecuperarUsuarioScreenState extends State<RecuperarUsuarioScreen> {
           const SizedBox(height: 16),
           Container(
             width: 58, height: 58,
-            decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), shape: BoxShape.circle),
+            decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), shape: BoxShape.circle),
             child: const Icon(Icons.person_outline_rounded, color: Colors.white, size: 30),
           ),
           const SizedBox(height: 10),

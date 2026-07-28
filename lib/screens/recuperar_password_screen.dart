@@ -40,8 +40,15 @@ class _RecuperarPasswordScreenState extends State<RecuperarPasswordScreen> {
       setState(() => _error = 'Las contraseñas no coinciden.');
       return;
     }
-    if (_passCtrl.text.length < 6) {
-      setState(() => _error = 'Mínimo 6 caracteres.');
+    final pass = _passCtrl.text;
+    final cumpleRequisitos = pass.length >= 8 &&
+        pass.contains(RegExp(r'[A-Z]')) &&
+        pass.contains(RegExp(r'[a-z]')) &&
+        pass.contains(RegExp(r'[0-9]')) &&
+        pass.contains(RegExp(r'[!@#\$%^&*(),.?":{}|<>_\-]'));
+    if (!cumpleRequisitos) {
+      setState(() => _error =
+      'Mínimo 8 caracteres, con mayúscula, minúscula, número y carácter especial.');
       return;
     }
     setState(() { _loading = true; _error = ''; });
@@ -75,7 +82,7 @@ class _RecuperarPasswordScreenState extends State<RecuperarPasswordScreen> {
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(18),
                     boxShadow: [BoxShadow(
-                        color: Colors.black.withOpacity(0.07),
+                        color: Colors.black.withValues(alpha: 0.07),
                         blurRadius: 16, offset: const Offset(0, 4))],
                   ),
                   padding: const EdgeInsets.all(20),
@@ -139,7 +146,7 @@ class _RecuperarPasswordScreenState extends State<RecuperarPasswordScreen> {
         Container(
           width: 58, height: 58,
           decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2), shape: BoxShape.circle),
+              color: Colors.white.withValues(alpha: 0.2), shape: BoxShape.circle),
           child: Icon(icons[_paso - 1], color: Colors.white, size: 30),
         ),
         const SizedBox(height: 10),
